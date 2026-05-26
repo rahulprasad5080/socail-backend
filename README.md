@@ -26,6 +26,15 @@ Set the same API token that the Android app uses:
 API_TOKEN=dev-socialhub-token
 ```
 
+Optional deploy knobs:
+
+```text
+YT_DLP_VERSION=2026.05.22
+YOUTUBE_DL_PATH=/usr/local/bin/yt-dlp
+```
+
+`YT_DLP_VERSION` pins the binary download to a specific yt-dlp release. `YOUTUBE_DL_PATH` uses an already-installed binary instead of downloading one during build.
+
 After deploy, open `/health`. It should return `"ytDlpReady": true`.
 
 The Android emulator can reach this backend at:

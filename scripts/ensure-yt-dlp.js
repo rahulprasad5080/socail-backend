@@ -6,6 +6,9 @@ const binaryName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
 const binaryDir = path.join(__dirname, "..", "node_modules", "yt-dlp-exec", "bin");
 const binaryPath = path.join(binaryDir, binaryName);
 const latestReleaseUrl = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest";
+const directDownloadUrl = process.env.YT_DLP_VERSION
+  ? `https://github.com/yt-dlp/yt-dlp/releases/download/${process.env.YT_DLP_VERSION}/${binaryName}`
+  : `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${binaryName}`;
 
 main().catch((error) => {
   console.error(error.message || error);
@@ -13,12 +16,38 @@ main().catch((error) => {
 });
 
 async function main() {
+  if (process.env.YOUTUBE_DL_PATH) {
+    if (fs.existsSync(process.env.YOUTUBE_DL_PATH)) {
+      console.log(`Using yt-dlp binary from YOUTUBE_DL_PATH at ${process.env.YOUTUBE_DL_PATH}`);
+      return;
+    }
+
+    throw new Error(`YOUTUBE_DL_PATH is set, but no file exists at ${process.env.YOUTUBE_DL_PATH}`);
+  }
+
   if (fs.existsSync(binaryPath)) {
     console.log(`yt-dlp binary already exists at ${binaryPath}`);
     return;
   }
 
   fs.mkdirSync(binaryDir, { recursive: true });
+  await downloadWithApiFallback(binaryPath);
+
+  if (process.platform !== "win32") {
+    fs.chmodSync(binaryPath, 0o755);
+  }
+
+  console.log(`Downloaded yt-dlp binary to ${binaryPath}`);
+}
+
+async function downloadWithApiFallback(destination) {
+  try {
+    await downloadFile(directDownloadUrl, destination);
+    return;
+  } catch (directError) {
+    console.warn(`Direct yt-dlp download failed: ${directError.message || directError}`);
+  }
+
   const release = await requestJson(latestReleaseUrl);
   const asset = release.assets.find((item) => item.name === binaryName);
 
@@ -26,13 +55,7 @@ async function main() {
     throw new Error(`Could not find ${binaryName} in the latest yt-dlp release`);
   }
 
-  await downloadFile(asset.browser_download_url, binaryPath);
-
-  if (process.platform !== "win32") {
-    fs.chmodSync(binaryPath, 0o755);
-  }
-
-  console.log(`Downloaded yt-dlp binary to ${binaryPath}`);
+  await downloadFile(asset.browser_download_url, destination);
 }
 
 function requestJson(url) {

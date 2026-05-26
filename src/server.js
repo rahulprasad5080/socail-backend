@@ -3,7 +3,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const dotenv = require("dotenv");
 const fs = require("fs");
-const ytDlp = require("yt-dlp-exec");
+const ytDlpExec = require("yt-dlp-exec");
 
 dotenv.config();
 //ff
@@ -11,6 +11,7 @@ dotenv.config();
 const app = express();
 const port = Number(process.env.PORT || 5000);
 const apiToken = process.env.API_TOKEN || "dev-socialhub-token";
+const ytDlp = ytDlpExec.create(resolveYtDlpPath());
 
 app.use(helmet());
 app.use(cors());
