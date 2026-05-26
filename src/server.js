@@ -178,7 +178,8 @@ function extractMediaOptions(info) {
         audioAvailable: hasAudio || audioExtensions.has(extension),
         chunked: Boolean(format.protocol && String(format.protocol).includes("m3u8")),
         cached: false,
-        requiresRendering: false
+        requiresRendering: false,
+        headers: sanitizeRequestHeaders(format.http_headers || info.http_headers)
       };
     })
     .sort((a, b) => {
@@ -237,6 +238,19 @@ function formatDuration(seconds) {
   const minutes = Math.floor(totalSeconds / 60);
   const remainingSeconds = Math.floor(totalSeconds % 60);
   return `${minutes}:${String(remainingSeconds).padStart(2, "0")}`;
+}
+
+function sanitizeRequestHeaders(headers) {
+  if (!headers || typeof headers !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(headers)
+      .filter(([key, value]) => typeof key === "string" && typeof value === "string")
+      .filter(([key, value]) => key.trim() && value.trim())
+      .filter(([key]) => !["cookie", "authorization"].includes(key.toLowerCase()))
+  );
 }
 
 const audioExtensions = new Set(["mp3", "m4a", "aac", "wav", "ogg", "opus"]);
