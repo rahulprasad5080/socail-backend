@@ -2,7 +2,10 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const dotenv = require("dotenv");
+const crypto = require("crypto");
 const fs = require("fs");
+const http = require("http");
+const https = require("https");
 const os = require("os");
 const path = require("path");
 const ytDlpExec = require("yt-dlp-exec");
@@ -15,6 +18,8 @@ const port = Number(process.env.PORT || 5000);
 const apiToken = process.env.API_TOKEN || "dev-socialhub-token";
 const cookiesConfig = prepareYtDlpCookies();
 const ytDlp = ytDlpExec.create(resolveYtDlpPath());
+const mediaProxyStore = new Map();
+const mediaProxyTtlMs = 30 * 60 * 1000;
 
 app.use(helmet());
 app.use(cors());
@@ -73,7 +78,7 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
       elapsedMs: Date.now() - startedAt
     });
 
-    const medias = extractMediaOptions(info);
+    const medias = extractMediaOptions(info, req);
 
     if (medias.length === 0) {
       console.warn(`[download:${requestId}] no media formats found`, {
@@ -113,6 +118,45 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
   }
 });
 
+app.get("/api/media/:id", async (req, res) => {
+  const requestId = createRequestId();
+  const startedAt = Date.now();
+
+  try {
+    if (req.query.token !== apiToken) {
+      return res.status(401).json({ error: "Invalid API token" });
+    }
+
+    cleanupMediaProxyStore();
+    const media = mediaProxyStore.get(req.params.id);
+    if (!media || media.expiresAt <= Date.now()) {
+      mediaProxyStore.delete(req.params.id);
+      return res.status(404).json({ error: "Download link expired. Resolve the URL again." });
+    }
+
+    console.log(`[media:${requestId}] proxy start`, {
+      url: safeLogUrl(media.url),
+      extension: media.extension
+    });
+
+    await proxyMedia(media, req, res);
+
+    console.log(`[media:${requestId}] proxy complete`, {
+      elapsedMs: Date.now() - startedAt
+    });
+  } catch (error) {
+    if (!res.headersSent) {
+      res.status(502).json({ error: "Unable to download media." });
+    } else {
+      res.destroy(error);
+    }
+    console.error(`[media:${requestId}] proxy failed`, {
+      message: error && error.message ? error.message : String(error),
+      elapsedMs: Date.now() - startedAt
+    });
+  }
+});
+
 app.use((_req, res) => {
   res.status(404).json({ error: "Not found" });
 });
@@ -146,7 +190,7 @@ function createYtDlpOptions() {
   return options;
 }
 
-function extractMediaOptions(info) {
+function extractMediaOptions(info, req) {
   const formats = Array.isArray(info.formats) ? info.formats : [];
   const directEntries = formats.length > 0 ? formats : [info];
   const seen = new Set();
@@ -166,6 +210,11 @@ function extractMediaOptions(info) {
 
       return {
         url: format.url,
+        proxyUrl: createMediaProxyUrl(req, {
+          url: format.url,
+          extension,
+          headers: sanitizeRequestHeaders(format.http_headers || info.http_headers)
+        }),
         quality: qualityLabel(format),
         extension,
         size: normalizeSize(format.filesize || format.filesize_approx),
@@ -188,6 +237,102 @@ function extractMediaOptions(info) {
       return (b.size || 0) - (a.size || 0);
     })
     .slice(0, 12);
+}
+
+function createMediaProxyUrl(req, media) {
+  const id = crypto.randomBytes(18).toString("base64url");
+  mediaProxyStore.set(id, {
+    ...media,
+    expiresAt: Date.now() + mediaProxyTtlMs
+  });
+
+  return `${getPublicBaseUrl(req)}/api/media/${id}?token=${encodeURIComponent(apiToken)}`;
+}
+
+function getPublicBaseUrl(req) {
+  if (process.env.PUBLIC_BASE_URL) {
+    return process.env.PUBLIC_BASE_URL.replace(/\/+$/, "");
+  }
+
+  const protocol = req.get("x-forwarded-proto") || req.protocol || "http";
+  const host = req.get("x-forwarded-host") || req.get("host");
+  return `${protocol}://${host}`;
+}
+
+function cleanupMediaProxyStore() {
+  const now = Date.now();
+  for (const [id, media] of mediaProxyStore.entries()) {
+    if (media.expiresAt <= now) {
+      mediaProxyStore.delete(id);
+    }
+  }
+}
+
+function proxyMedia(media, clientReq, clientRes, redirectCount = 0) {
+  if (redirectCount > 5) {
+    return Promise.reject(new Error("Too many media redirects"));
+  }
+
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(media.url);
+    const transport = parsed.protocol === "http:" ? http : https;
+    const headers = {
+      ...media.headers,
+      "User-Agent": media.headers["User-Agent"] || media.headers["user-agent"] || "Mozilla/5.0 SocialHubDownloader/1.0"
+    };
+
+    if (clientReq.headers.range) {
+      headers.Range = clientReq.headers.range;
+    }
+
+    const upstreamReq = transport.get(
+      media.url,
+      {
+        headers,
+        timeout: 120000
+      },
+      (upstreamRes) => {
+        if (isRedirect(upstreamRes.statusCode) && upstreamRes.headers.location) {
+          upstreamRes.resume();
+          media.url = new URL(upstreamRes.headers.location, media.url).toString();
+          proxyMedia(media, clientReq, clientRes, redirectCount + 1).then(resolve, reject);
+          return;
+        }
+
+        if (upstreamRes.statusCode < 200 || upstreamRes.statusCode > 299) {
+          upstreamRes.resume();
+          reject(new Error(`Media upstream returned ${upstreamRes.statusCode}`));
+          return;
+        }
+
+        clientRes.status(upstreamRes.statusCode);
+        copyResponseHeader(upstreamRes, clientRes, "content-type");
+        copyResponseHeader(upstreamRes, clientRes, "content-length");
+        copyResponseHeader(upstreamRes, clientRes, "content-range");
+        copyResponseHeader(upstreamRes, clientRes, "accept-ranges");
+        clientRes.setHeader("Content-Disposition", `attachment; filename="socialhub.${media.extension || "mp4"}"`);
+
+        upstreamRes.pipe(clientRes);
+        upstreamRes.on("end", resolve);
+        upstreamRes.on("error", reject);
+      }
+    );
+
+    upstreamReq.on("timeout", () => upstreamReq.destroy(new Error("Timed out while downloading media")));
+    upstreamReq.on("error", reject);
+    clientReq.on("close", () => upstreamReq.destroy());
+  });
+}
+
+function copyResponseHeader(from, to, headerName) {
+  const value = from.headers[headerName];
+  if (value) {
+    to.setHeader(headerName, value);
+  }
+}
+
+function isRedirect(statusCode) {
+  return [301, 302, 303, 307, 308].includes(statusCode);
 }
 
 function qualityLabel(format) {
