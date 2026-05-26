@@ -24,16 +24,37 @@ app.get("/health", (_req, res) => {
 });
 
 app.post(["/api/resolve", "/api/download"], async (req, res) => {
+  const requestId = createRequestId();
+  const startedAt = Date.now();
+  const route = req.originalUrl;
+
   try {
     const { url, token } = req.body || {};
+    console.log(`[download:${requestId}] incoming ${req.method} ${route}`, {
+      hasToken: Boolean(token),
+      url: safeLogUrl(url)
+    });
 
     if (!token || token !== apiToken) {
+      console.warn(`[download:${requestId}] rejected invalid token`, {
+        elapsedMs: Date.now() - startedAt
+      });
       return res.status(401).json({ error: "Invalid API token" });
     }
 
     if (!isSupportedHttpUrl(url)) {
+      console.warn(`[download:${requestId}] rejected invalid url`, {
+        url: safeLogUrl(url),
+        elapsedMs: Date.now() - startedAt
+      });
       return res.status(400).json({ error: "A valid http/https URL is required" });
     }
+
+    console.log(`[download:${requestId}] yt-dlp start`, {
+      url: safeLogUrl(url),
+      ytDlpPath: resolveYtDlpPath(),
+      ytDlpReady: fs.existsSync(resolveYtDlpPath())
+    });
 
     const info = await ytDlp(url, {
       dumpSingleJson: true,
@@ -44,13 +65,24 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
       addHeader: ["user-agent:Mozilla/5.0 SocialHubDownloader/1.0"]
     });
 
+    console.log(`[download:${requestId}] yt-dlp success`, {
+      title: info.title || "",
+      extractor: info.extractor_key || info.extractor || "",
+      formatCount: Array.isArray(info.formats) ? info.formats.length : 0,
+      elapsedMs: Date.now() - startedAt
+    });
+
     const medias = extractMediaOptions(info);
 
     if (medias.length === 0) {
+      console.warn(`[download:${requestId}] no media formats found`, {
+        webpageUrl: safeLogUrl(info.webpage_url || info.original_url || url),
+        elapsedMs: Date.now() - startedAt
+      });
       return res.status(404).json({ error: "No downloadable media formats found" });
     }
 
-    res.json({
+    const payload = {
       url: info.webpage_url || info.original_url || url,
       title: info.title || "Social media download",
       thumbnail: info.thumbnail || "",
@@ -58,10 +90,25 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
       source: info.extractor_key || info.extractor || "",
       sid: info.id || "",
       medias
+    };
+
+    console.log(`[download:${requestId}] response ready`, {
+      mediaCount: medias.length,
+      firstQuality: medias[0] ? medias[0].quality : "",
+      firstExtension: medias[0] ? medias[0].extension : "",
+      elapsedMs: Date.now() - startedAt
     });
+
+    res.json(payload);
   } catch (error) {
     const message = error && error.message ? error.message : "Unable to resolve media";
     const status = /unsupported url|not supported/i.test(message) ? 400 : 502;
+    console.error(`[download:${requestId}] failed`, {
+      status,
+      message,
+      stack: error && error.stack ? error.stack : "",
+      elapsedMs: Date.now() - startedAt
+    });
     res.status(status).json({ error: message });
   }
 });
@@ -173,6 +220,20 @@ function formatDuration(seconds) {
 }
 
 const audioExtensions = new Set(["mp3", "m4a", "aac", "wav", "ogg", "opus"]);
+
+function createRequestId() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function safeLogUrl(value) {
+  if (typeof value !== "string" || value.trim() === "") return "";
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+  } catch {
+    return String(value).slice(0, 120);
+  }
+}
 
 function resolveYtDlpPath() {
   const binaryName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
