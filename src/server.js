@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const dotenv = require("dotenv");
+const fs = require("fs");
 const ytDlp = require("yt-dlp-exec");
 
 dotenv.config();
@@ -15,7 +16,11 @@ app.use(cors());
 app.use(express.json({ limit: "64kb" }));
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, service: "socialhub-resolver-api" });
+  res.json({
+    ok: true,
+    service: "socialhub-resolver-api",
+    ytDlpReady: fs.existsSync(resolveYtDlpPath())
+  });
 });
 
 app.post(["/api/resolve", "/api/download"], async (req, res) => {
@@ -168,3 +173,8 @@ function formatDuration(seconds) {
 }
 
 const audioExtensions = new Set(["mp3", "m4a", "aac", "wav", "ogg", "opus"]);
+
+function resolveYtDlpPath() {
+  const binaryName = process.platform === "win32" ? "yt-dlp.exe" : "yt-dlp";
+  return process.env.YOUTUBE_DL_PATH || `${__dirname}/../node_modules/yt-dlp-exec/bin/${binaryName}`;
+}

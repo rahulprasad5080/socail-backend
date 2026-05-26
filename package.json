@@ -5,8 +5,11 @@
   "description": "Node.js resolver API for SocialHub Android downloader.",
   "main": "src/server.js",
   "scripts": {
+    "build": "npm run ensure-yt-dlp",
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "ensure-yt-dlp": "node scripts/ensure-yt-dlp.js",
+    "postinstall": "npm run ensure-yt-dlp"
   },
   "dependencies": {
     "cors": "^2.8.5",

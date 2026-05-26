@@ -11,6 +11,23 @@ copy .env.example .env
 npm run dev
 ```
 
+## Render deploy
+
+Use these settings on Render:
+
+```text
+Build Command: npm install && npm run build
+Start Command: npm start
+```
+
+Set the same API token that the Android app uses:
+
+```text
+API_TOKEN=dev-socialhub-token
+```
+
+After deploy, open `/health`. It should return `"ytDlpReady": true`.
+
 The Android emulator can reach this backend at:
 
 ```text
