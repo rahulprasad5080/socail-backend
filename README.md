@@ -37,6 +37,14 @@ YT_DLP_COOKIES_B64=<base64 encoded Netscape cookies.txt>
 `YT_DLP_VERSION` pins the binary download to a specific yt-dlp release. `YOUTUBE_DL_PATH` uses an already-installed binary instead of downloading one during build.
 `YT_DLP_COOKIES_B64` lets yt-dlp use exported YouTube cookies when Render gets "Sign in to confirm you're not a bot" from YouTube.
 
+Create `YT_DLP_COOKIES_B64` from a Netscape-format `cookies.txt` file:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\cookies.txt"))
+```
+
+The cookies file must start with `# Netscape HTTP Cookie File` or contain tab-separated Netscape cookie rows.
+
 After deploy, open `/health`. It should return `"ytDlpReady": true`.
 
 The Android emulator can reach this backend at:

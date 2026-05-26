@@ -13,7 +13,7 @@ dotenv.config();
 const app = express();
 const port = Number(process.env.PORT || 5000);
 const apiToken = process.env.API_TOKEN || "dev-socialhub-token";
-const cookiesPath = prepareYtDlpCookies();
+const cookiesConfig = prepareYtDlpCookies();
 const ytDlp = ytDlpExec.create(resolveYtDlpPath());
 
 app.use(helmet());
@@ -24,7 +24,9 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "socialhub-resolver-api",
-    ytDlpReady: fs.existsSync(resolveYtDlpPath())
+    ytDlpReady: fs.existsSync(resolveYtDlpPath()),
+    cookiesReady: Boolean(cookiesConfig.path),
+    cookiesError: cookiesConfig.error || ""
   });
 });
 
@@ -60,6 +62,10 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
       ytDlpPath: resolveYtDlpPath(),
       ytDlpReady: fs.existsSync(resolveYtDlpPath())
     });
+
+    if (cookiesConfig.error && isYouTubeUrl(url)) {
+      return res.status(500).json({ error: cookiesConfig.error });
+    }
 
     const resolveUrl = normalizeResolveUrl(url);
     const info = await ytDlp(resolveUrl, createYtDlpOptions());
@@ -137,8 +143,8 @@ function createYtDlpOptions() {
     addHeader: ["user-agent:Mozilla/5.0 SocialHubDownloader/1.0"]
   };
 
-  if (cookiesPath) {
-    options.cookies = cookiesPath;
+  if (cookiesConfig.path) {
+    options.cookies = cookiesConfig.path;
   }
 
   return options;
@@ -269,6 +275,14 @@ function normalizeYtDlpError(error) {
   const rawMessage = error && error.message ? error.message : "Unable to resolve media";
   const logMessage = rawMessage.replace(/\s+null\s*$/i, "").trim();
 
+  if (/does not look like a netscape format cookies file|skipping cookie file entry/i.test(logMessage)) {
+    return {
+      status: 500,
+      logMessage,
+      clientMessage: "YT_DLP_COOKIES_B64 is invalid. Use a base64 encoded Netscape cookies.txt export."
+    };
+  }
+
   if (/sign in to confirm|not a bot|cookies/i.test(logMessage)) {
     return {
       status: 403,
@@ -302,25 +316,68 @@ function normalizeYtDlpError(error) {
 
 function prepareYtDlpCookies() {
   if (process.env.YT_DLP_COOKIES_PATH) {
-    return process.env.YT_DLP_COOKIES_PATH;
+    return fs.existsSync(process.env.YT_DLP_COOKIES_PATH)
+      ? { path: process.env.YT_DLP_COOKIES_PATH, error: "" }
+      : { path: "", error: "YT_DLP_COOKIES_PATH is set, but the file does not exist." };
   }
 
-  const cookieText = readCookieTextFromEnv();
-  if (!cookieText) {
-    return "";
+  const cookieResult = readCookieTextFromEnv();
+  if (!cookieResult.text) {
+    return { path: "", error: cookieResult.error || "" };
+  }
+
+  const cookieText = cookieResult.text.replace(/\\n/g, "\n");
+  if (!isNetscapeCookieFile(cookieText)) {
+    return {
+      path: "",
+      error: "YT_DLP_COOKIES_B64 is invalid. Paste a base64 encoded Netscape cookies.txt export."
+    };
   }
 
   const destination = path.join(os.tmpdir(), "yt-dlp-cookies.txt");
-  fs.writeFileSync(destination, cookieText.replace(/\\n/g, "\n"), { mode: 0o600 });
-  return destination;
+  fs.writeFileSync(destination, cookieText, { mode: 0o600 });
+  return { path: destination, error: "" };
 }
 
 function readCookieTextFromEnv() {
   if (process.env.YT_DLP_COOKIES_B64) {
-    return Buffer.from(process.env.YT_DLP_COOKIES_B64, "base64").toString("utf8");
+    const encoded = process.env.YT_DLP_COOKIES_B64.trim().replace(/\s/g, "");
+
+    if (!isBase64Text(encoded)) {
+      return {
+        text: "",
+        error: "YT_DLP_COOKIES_B64 is not valid base64. Use YT_DLP_COOKIES for raw cookies or encode cookies.txt first."
+      };
+    }
+
+    return { text: Buffer.from(encoded, "base64").toString("utf8"), error: "" };
   }
 
-  return process.env.YT_DLP_COOKIES || "";
+  return { text: process.env.YT_DLP_COOKIES || "", error: "" };
+}
+
+function isBase64Text(value) {
+  if (!value || value.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return false;
+  }
+
+  return Buffer.from(value, "base64").toString("base64") === value;
+}
+
+function isNetscapeCookieFile(value) {
+  const text = value.trim();
+  return text.startsWith("# Netscape HTTP Cookie File") || text.split(/\r?\n/).some((line) => {
+    if (!line || line.startsWith("#")) return false;
+    return line.split("\t").length >= 7;
+  });
+}
+
+function isYouTubeUrl(value) {
+  try {
+    return isYouTubeHost(new URL(value).hostname);
+  } catch {
+    return false;
+  }
 }
 
 function isYouTubeHost(hostname) {
