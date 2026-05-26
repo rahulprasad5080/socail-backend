@@ -3,6 +3,8 @@ const cors = require("cors");
 const helmet = require("helmet");
 const dotenv = require("dotenv");
 const fs = require("fs");
+const os = require("os");
+const path = require("path");
 const ytDlpExec = require("yt-dlp-exec");
 
 dotenv.config();
@@ -11,6 +13,7 @@ dotenv.config();
 const app = express();
 const port = Number(process.env.PORT || 5000);
 const apiToken = process.env.API_TOKEN || "dev-socialhub-token";
+const cookiesPath = prepareYtDlpCookies();
 const ytDlp = ytDlpExec.create(resolveYtDlpPath());
 
 app.use(helmet());
@@ -58,14 +61,8 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
       ytDlpReady: fs.existsSync(resolveYtDlpPath())
     });
 
-    const info = await ytDlp(url, {
-      dumpSingleJson: true,
-      noWarnings: true,
-      noCallHome: true,
-      skipDownload: true,
-      preferFreeFormats: true,
-      addHeader: ["user-agent:Mozilla/5.0 SocialHubDownloader/1.0"]
-    });
+    const resolveUrl = normalizeResolveUrl(url);
+    const info = await ytDlp(resolveUrl, createYtDlpOptions());
 
     console.log(`[download:${requestId}] yt-dlp success`, {
       title: info.title || "",
@@ -103,15 +100,14 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
 
     res.json(payload);
   } catch (error) {
-    const message = error && error.message ? error.message : "Unable to resolve media";
-    const status = /unsupported url|not supported/i.test(message) ? 400 : 502;
+    const failure = normalizeYtDlpError(error);
     console.error(`[download:${requestId}] failed`, {
-      status,
-      message,
+      status: failure.status,
+      message: failure.logMessage,
       stack: error && error.stack ? error.stack : "",
       elapsedMs: Date.now() - startedAt
     });
-    res.status(status).json({ error: message });
+    res.status(failure.status).json({ error: failure.clientMessage });
   }
 });
 
@@ -130,6 +126,22 @@ function isSupportedHttpUrl(value) {
   } catch {
     return false;
   }
+}
+
+function createYtDlpOptions() {
+  const options = {
+    dumpSingleJson: true,
+    noWarnings: true,
+    skipDownload: true,
+    preferFreeFormats: true,
+    addHeader: ["user-agent:Mozilla/5.0 SocialHubDownloader/1.0"]
+  };
+
+  if (cookiesPath) {
+    options.cookies = cookiesPath;
+  }
+
+  return options;
 }
 
 function extractMediaOptions(info) {
@@ -235,6 +247,85 @@ function safeLogUrl(value) {
   } catch {
     return String(value).slice(0, 120);
   }
+}
+
+function normalizeResolveUrl(value) {
+  try {
+    const parsed = new URL(value);
+
+    if (isYouTubeHost(parsed.hostname)) {
+      ["feature", "si", "app", "pp", "embeds_referring_euri", "embeds_referring_origin"].forEach((key) => {
+        parsed.searchParams.delete(key);
+      });
+    }
+
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
+function normalizeYtDlpError(error) {
+  const rawMessage = error && error.message ? error.message : "Unable to resolve media";
+  const logMessage = rawMessage.replace(/\s+null\s*$/i, "").trim();
+
+  if (/sign in to confirm|not a bot|cookies/i.test(logMessage)) {
+    return {
+      status: 403,
+      logMessage,
+      clientMessage: "YouTube blocked this server. Add YouTube cookies in YT_DLP_COOKIES_B64 or try another video."
+    };
+  }
+
+  if (/this video is not available|video unavailable|private video|removed by/i.test(logMessage)) {
+    return {
+      status: 404,
+      logMessage,
+      clientMessage: "This video is not available."
+    };
+  }
+
+  if (/unsupported url|not supported/i.test(logMessage)) {
+    return {
+      status: 400,
+      logMessage,
+      clientMessage: "Unsupported URL."
+    };
+  }
+
+  return {
+    status: 502,
+    logMessage,
+    clientMessage: "Unable to resolve media."
+  };
+}
+
+function prepareYtDlpCookies() {
+  if (process.env.YT_DLP_COOKIES_PATH) {
+    return process.env.YT_DLP_COOKIES_PATH;
+  }
+
+  const cookieText = readCookieTextFromEnv();
+  if (!cookieText) {
+    return "";
+  }
+
+  const destination = path.join(os.tmpdir(), "yt-dlp-cookies.txt");
+  fs.writeFileSync(destination, cookieText.replace(/\\n/g, "\n"), { mode: 0o600 });
+  return destination;
+}
+
+function readCookieTextFromEnv() {
+  if (process.env.YT_DLP_COOKIES_B64) {
+    return Buffer.from(process.env.YT_DLP_COOKIES_B64, "base64").toString("utf8");
+  }
+
+  return process.env.YT_DLP_COOKIES || "";
+}
+
+function isYouTubeHost(hostname) {
+  const host = hostname.toLowerCase();
+  return host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com");
 }
 
 function resolveYtDlpPath() {
