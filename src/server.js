@@ -63,10 +63,6 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
       ytDlpReady: fs.existsSync(resolveYtDlpPath())
     });
 
-    if (cookiesConfig.error && isYouTubeUrl(url)) {
-      return res.status(500).json({ error: cookiesConfig.error });
-    }
-
     const resolveUrl = normalizeResolveUrl(url);
     const info = await ytDlp(resolveUrl, createYtDlpOptions());
 
@@ -332,7 +328,7 @@ function prepareYtDlpCookies() {
   if (process.env.YT_DLP_COOKIES_PATH) {
     return fs.existsSync(process.env.YT_DLP_COOKIES_PATH)
       ? { path: process.env.YT_DLP_COOKIES_PATH, error: "" }
-      : { path: "", error: "YT_DLP_COOKIES_PATH is set, but the file does not exist." };
+      : warnAndSkipCookies("YT_DLP_COOKIES_PATH is set, but the file does not exist.");
   }
 
   const cookieResult = readCookieTextFromEnv();
@@ -360,7 +356,7 @@ function readCookieTextFromEnv() {
     if (!isBase64Text(encoded)) {
       return {
         text: "",
-        error: "YT_DLP_COOKIES_B64 is not valid base64. Use YT_DLP_COOKIES for raw cookies or encode cookies.txt first."
+        error: "YT_DLP_COOKIES_B64 is not valid base64, so cookies were skipped. Use YT_DLP_COOKIES for raw cookies or encode cookies.txt first."
       };
     }
 
@@ -368,6 +364,11 @@ function readCookieTextFromEnv() {
   }
 
   return { text: process.env.YT_DLP_COOKIES || "", error: "" };
+}
+
+function warnAndSkipCookies(error) {
+  console.warn(error);
+  return { path: "", error };
 }
 
 function isBase64Text(value) {
