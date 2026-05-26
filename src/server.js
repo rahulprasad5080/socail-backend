@@ -69,7 +69,7 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
     });
 
     const resolveUrl = normalizeResolveUrl(url);
-    const info = await ytDlp(resolveUrl, createYtDlpOptions());
+    const info = await resolveWithYtDlp(resolveUrl, requestId);
 
     console.log(`[download:${requestId}] yt-dlp success`, {
       title: info.title || "",
@@ -102,6 +102,7 @@ app.post(["/api/resolve", "/api/download"], async (req, res) => {
       mediaCount: medias.length,
       firstQuality: medias[0] ? medias[0].quality : "",
       firstExtension: medias[0] ? medias[0].extension : "",
+      firstProxyUrl: medias[0] ? safeLogUrl(medias[0].proxyUrl) : "",
       elapsedMs: Date.now() - startedAt
     });
 
@@ -136,7 +137,8 @@ app.get("/api/media/:id", async (req, res) => {
 
     console.log(`[media:${requestId}] proxy start`, {
       url: safeLogUrl(media.url),
-      extension: media.extension
+      extension: media.extension,
+      range: req.headers.range || ""
     });
 
     await proxyMedia(media, req, res);
@@ -188,6 +190,22 @@ function createYtDlpOptions() {
   }
 
   return options;
+}
+
+async function resolveWithYtDlp(url, requestId) {
+  try {
+    return await ytDlp(url, createYtDlpOptions());
+  } catch (error) {
+    if (!isYouTubeUrl(url) || !isBotCheckError(error)) {
+      throw error;
+    }
+
+    console.warn(`[download:${requestId}] youtube bot check; retrying with alternate player clients`);
+    return ytDlp(url, {
+      ...createYtDlpOptions(),
+      extractorArgs: ["youtube:player_client=android,web"]
+    });
+  }
 }
 
 function extractMediaOptions(info, req) {
@@ -289,7 +307,7 @@ function proxyMedia(media, clientReq, clientRes, redirectCount = 0) {
       media.url,
       {
         headers,
-        timeout: 120000
+        timeout: 180000
       },
       (upstreamRes) => {
         if (isRedirect(upstreamRes.statusCode) && upstreamRes.headers.location) {
@@ -467,6 +485,11 @@ function normalizeYtDlpError(error) {
     logMessage,
     clientMessage: "Unable to resolve media."
   };
+}
+
+function isBotCheckError(error) {
+  const message = error && error.message ? error.message : "";
+  return /sign in to confirm|not a bot/i.test(message);
 }
 
 function prepareYtDlpCookies() {
