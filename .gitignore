@@ -1,4 +1,7 @@
 node_modules/
+__pycache__/
+.venv/
+*.py[cod]
 
 .env
 .env.local
@@ -16,3 +19,4 @@ coverage/
 
 .DS_Store
 Thumbs.db
+
