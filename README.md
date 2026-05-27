@@ -1,24 +1,33 @@
 # SocialHub Resolver API
 
-Node.js backend for resolving social media page links into downloadable media URLs.
+Python FastAPI backend for resolving social media page links into downloadable media URLs.
 
 ## Setup
 
 ```bash
-cd backend
-npm install
-copy .env.example .env
-npm run dev
+# Create and activate a virtual environment
+python -m venv venv
+venv\Scripts\activate      # On Windows PowerShell/CMD
+source venv/bin/activate   # On macOS/Linux
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Configure environment variables
+copy .env.example .env     # On Windows
+cp .env.example .env       # On macOS/Linux
+
+# Run development server
+python main.py
 ```
 
-## Render deploy
+## Render Deploy
 
-Use these settings on Render:
+This repository includes a `render.yaml` blueprint file for easy automated deployment. If you wish to configure it manually on Render, use these settings:
 
-```text
-Build Command: npm install && npm run build
-Start Command: npm start
-```
+- **Runtime**: `Python`
+- **Build Command**: `pip install -r requirements.txt`
+- **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 
 Set the same API token that the Android app uses:
 

@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: socialhub-resolver-api
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: API_TOKEN
+        value: dev-socialhub-token
+      - key: PORT
+        value: 5000
